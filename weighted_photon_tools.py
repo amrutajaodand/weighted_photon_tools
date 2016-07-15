@@ -47,6 +47,15 @@ def weighted_histogram_errors(phases, probs=None, bins=20, middle=0):
     return prob, prob_uncert, be
 
 def background_level(probs):
+    """Number of background photons that appear to be foreground
+
+    Given the probability weights specified in probs, there will be some
+    background photons contributing to the total probabilty coming from
+    the source. The number returned from this function is the total
+    probability contributed by background photons. When plotting a pulse
+    phase histogram in rates, for example, this level (converted to rate)
+    should be subtracted from all bins.
+    """
     if probs is not None:
         bglevel = np.sum(probs*(1-probs))
     else:
@@ -54,8 +63,15 @@ def background_level(probs):
     return bglevel
 
 def foreground_scale(probs):
+    """Scale by which apparent foreground rates should be amplified
+
+    Given the photon probabilities specified in probs, once the background
+    is subtracted, the foreground total probability is underestimated; scale
+    by this factor to recover true (estimated) photon counts.
+    """
     if probs is not None:
         fgscale = np.sum(probs)/np.sum(probs**2)
+        # fgscale = (1-background_level(probs)/np.sum(probs))**(-1)
     else:
         fgscale = 1
     return fgscale
