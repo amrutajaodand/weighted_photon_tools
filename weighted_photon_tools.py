@@ -46,6 +46,20 @@ def weighted_histogram_errors(phases, probs=None, bins=20, middle=0):
 
     return prob, prob_uncert, be
 
+def background_level(probs):
+    if probs is not None:
+        bglevel = np.sum(probs*(1-probs))
+    else:
+        bglevel = 0
+    return bglevel
+
+def foreground_scale(probs):
+    if probs is not None:
+        fgscale = np.sum(probs)/np.sum(probs**2)
+    else:
+        fgscale = 1
+    return fgscale
+
 def plot_result(phases, probs=None, middle=0,
                 nharm='best', bins='best',
                 time=1.):
@@ -57,21 +71,20 @@ def plot_result(phases, probs=None, middle=0,
         nharm = nc
     if bins is None or bins=='best':
         bins = 4*nharm
-    if probs is not None:
-        bglevel = np.sum(probs*(1-probs))/time
-    else:
-        bglevel = 0
+    bglevel = background_level(probs)/time
+    fgscale = foreground_scale(probs)
     prob, prob_uncert, be = weighted_histogram_errors(phases, probs, bins,
                                                           middle=middle)
-    plt.plot(np.repeat(be,2)[1:-1], np.repeat(prob,2)*bins/time-bglevel)
+    plt.plot(np.repeat(be,2)[1:-1],
+                fgscale*(np.repeat(prob,2)*bins/time-bglevel))
     plt.errorbar((be[1:]+be[:-1])/2,
-                     prob*bins/time-bglevel,
-                     prob_uncert*bins/time,
+                     fgscale*(prob*bins/time-bglevel),
+                     fgscale*(prob_uncert*bins/time),
                      linestyle='none')
 
     xs = np.linspace(middle-0.5,middle+0.5,16*nharm+1)
     ys = reconstruct(efc[:nharm+1], xs)
-    plt.plot(xs,ys/time-bglevel)
+    plt.plot(xs,fgscale*(ys/time-bglevel))
 
     plt.xlim(middle-0.5, middle+0.5)
 
