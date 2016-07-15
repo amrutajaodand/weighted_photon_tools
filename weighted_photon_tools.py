@@ -37,7 +37,7 @@ def h(phases, probs=None, n=20):
 def weighted_histogram_errors(phases, probs=None, bins=20, middle=0):
     if probs is None:
         probs = np.ones_like(phases)
-    phases = (phases-(middle-0.5)) % 1 + (middle-0.5)
+    phases = warp(phases,middle)
     prob, be = np.histogram(phases, bins=bins, range=(middle-0.5,middle+0.5),
                              weights=probs)
     prob_sq, be = np.histogram(phases, bins=bins, range=(middle-0.5,middle+0.5),
@@ -239,8 +239,8 @@ def fold_phases(phases, probs=None, n=20):
         return Profile(c, np.sqrt(np.sum(probs**2)/2.))
 
 
-def wrap(x):
-    return (x+0.5) % 1 - 0.5
+def wrap(x,middle=0):
+    return (x+(0.5-middle)) % 1 - (0.5-middle)
 
 def center_wrap(x, axis=None, weights=None):
     circ_mean = np.angle(np.average(np.exp(2.j*np.pi*x),
