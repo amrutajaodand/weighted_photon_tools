@@ -107,23 +107,46 @@ def plot_result(phases, probs=None, middle=0,
     return H, bins
 
 class Profile(object):
+    """Object representing a pulse profile in Fourier space
+
+    This represents a periodic function (with period 1) estimated from
+    a finite data set; it therefore records a finite number of
+    coefficients with uncertainties on each. These objects allow
+    shifting, finding the optimal shift to match another, estimation
+    of pulsed significance, estimation of the optimal number of harmonics
+    for representation, and estimation of RMS amplitude with uncertainty.
+    """
     def __init__(self, coefficients, uncertainties):
         self.coefficients = np.array(coefficients, dtype=np.complex)
         if isinstance(uncertainties, float) or isinstance(uncertainties, int):
-            self.uncertainties = uncertainties*np.ones(len(self.coefficients),dtype=np.float)
+            self.uncertainties = uncertainties*np.ones(len(self.coefficients),
+                                                           dtype=np.float)
         else:
             self.uncertainties = np.array(uncertainties)
         n, = self.coefficients.shape
         if self.uncertainties.shape != (n,):
-            raise ValueError("Uncertainties array is not the same shape as coefficients (%s != %s)" 
-                             % (self.uncertainties.shape, self.coefficients.shape))
+            raise ValueError("Uncertainties array is not the same shape "
+                                 "as coefficients (%s != %s)"
+                             % (self.uncertainties.shape,
+                                    self.coefficients.shape))
     def scale(self, factor):
         self.coefficients *= factor
         self.uncertainties *= factor
-    def add(self, amount):
-        self.coefficients[0] += amount
+    def add(self, other):
+        if isinstance(other, float):
+            self.coefficients[0] += amount
+        else:
+            raise ValueError("Adding %s to Profile unimplemented" % other)
 
     def H_internal(self):
+        """Compute best number of harmonics and significance
+
+        Returns the optimal number of harmonics for representing this Profile
+        and the raw H score (which is proportional to the logarithm of the false
+        positive probability). This number of harmonics is roughlt the number of
+        statistically significant harmonics, and is often appropriate
+        for graphical representation or cross-correlation.
+        """
         coeff = self.coefficients[1:]/(self.uncertainties[1:]*np.sqrt(2))
         total_prob_sq = 1
         k = 2*np.abs(coeff)**2/total_prob_sq
@@ -131,13 +154,19 @@ class Profile(object):
         h, nbest = np.amax(a), np.argmax(a)+1
         return h, nbest
     def H(self):
+        """Test for significance of pulsations
+
+        This function applies the H test to the Profile and returns the
+        logarithm of the probability that pure noise would have given rise
+        to a Profile this strongly modulated.
+        """
         return -0.398405*self.H_internal()[0]
 
     def grid_values(self, n_coefficients=None, n=None, turns=1):
         if n_coefficients is None:
             n_coefficients = len(self.coefficients)-1
         elif n_coefficients>len(self.coefficients)-1:
-            raise ValueError("%d coefficients requested but only %d available" 
+            raise ValueError("%d coefficients requested but only %d available"
                              % (n_coefficients, len(self.coefficients)-1))
         if n is None:
             nn = 2*n_coefficients*16
@@ -151,11 +180,15 @@ class Profile(object):
                     [np.fft.irfft(c.conj(),n=n)*n]*turns))
 
     def shift(self, phase=None):
+        # FIXME: explain direction
         if phase is None:
             phase = -np.angle(self.coefficients[1])/(2*np.pi)
-        self.coefficients *= np.exp(2.j*np.pi*phase*np.arange(len(self.coefficients)))
+        self.coefficients *= np.exp(2.j*np.pi*phase
+                                        *np.arange(len(self.coefficients)))
 
     def compute_shift(self, template, n_coefficients=None):
+        # FIXME: explain direction
+        # FIXME: use uncertainties sensibly
         if n_coefficients is None:
             n_coefficients = min(len(self.coefficients)-1,
                                  len(template.coefficients))
@@ -176,17 +209,22 @@ class Profile(object):
             return -np.sum(
                     c1*c2.conj()*np.exp(2.j*np.pi*p*np.arange(len(c1)))
                     ).real
-        #return r, p, [cross(pp) for pp in np.linspace(0,1,len(r), endpoint=False)] 
-        #print cross(p-1/n), cross(p), cross(p+1/n)
         pmax = scipy.optimize.brent(cross,
                                     brack=(p-1/n, p, p+1/n))
         return pmax
 
     def trim(self, n_coefficients):
+        """Discard excess coefficients
+
+        Typically the higher Fourier coefficients will be more seriously
+        contaminated by noise. This function discards them. Use H_internal
+        to obtain a recommendation for how many are worth keeping.
+        """
         self.coefficients = self.coefficients[:n_coefficients+1]
         self.uncertainties = self.uncertainties[:n_coefficients+1]
 
     def generate_fake_phases(self, n, n_coefficients=None):
+        """Generate a set of phases drawn from this distribution"""
         p, v = self.grid_values(n_coefficients=n_coefficients)
         cs = np.cumsum(v)
         r = p[np.searchsorted(cs,np.random.uniform(high=cs[-1], size=n))]
@@ -194,6 +232,12 @@ class Profile(object):
         return r
 
     def generate_fake_profile(self, n_coefficients=None, uncertainties=None):
+        """Generate a profile similar to this by applying noise
+
+        The amount of noise is set by the uncertainties in the Fourier
+        coefficients of this Profile. This may be useful for testing the
+        correctness of statistical tests.
+        """
         if n_coefficients is None:
             n_coefficients = len(self.coefficients)-1
         if uncertainties is None:
@@ -210,17 +254,18 @@ class Profile(object):
                        self.uncertainties.copy())
 
     def rms(self, n_coefficients=None):
+        """Return an estimate of the RMS amplitude of this profile"""
         if n_coefficients is None:
             n_coefficients = len(self.coefficients)-1
         elif n_coefficients>len(self.coefficients)-1:
-            raise ValueError("%d coefficients requested but only %d available" 
+            raise ValueError("%d coefficients requested but only %d available"
                              % (n_coefficients, len(self.coefficients)-1))
         s = np.sum(np.abs(self.coefficients[1:n_coefficients+1])**2
                    -2*self.uncertainties[1:n_coefficients+1]**2)
-        #s = np.sum(np.abs(self.coefficients[1:n_coefficients+1])**2)
         if s<0:
             s=0
-        return np.sqrt(2*s), np.sqrt(2*np.mean(self.uncertainties[1:n_coefficients+1]**2))
+        return (np.sqrt(2*s),
+                np.sqrt(2*np.mean(self.uncertainties[1:n_coefficients+1]**2)))
 
 def circmean(phases):
     return np.angle(np.sum(np.exp(2.j*np.pi*phases)))/(2*np.pi)
