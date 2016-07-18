@@ -2,6 +2,10 @@
 
 from __future__ import division, print_function
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 
 def h_fpp(H):
@@ -296,3 +300,75 @@ def center_wrap(x, axis=None, weights=None):
 
 def std_wrap(x):
     return np.std(center_wrap(x))
+
+
+
+def ensure_list(l):
+    if isinstance(l,basestring) or isinstance(l,int):
+        l = [l]
+    return l
+
+def touch(f):
+    if not os.path.exists(f):
+        raise ValueError("File %s does not exist yet" % f)
+    subprocess.check_call(["touch",f])
+
+def need_rerun(inputs, outputs):
+    inputs = ensure_list(inputs)
+    outputs = ensure_list(outputs)
+
+    oldest_out = np.inf
+
+    for o in outputs:
+        if not os.path.exists(o):
+            return True
+        oldest_out = min(os.path.getmtime(o), oldest_out)
+
+    for i in inputs:
+        if os.path.getmtime(i) >= oldest_out:
+            return True
+
+    return False
+
+class Command(object):
+    def __init__(self, command,
+                     infiles=[], outfiles=[],
+                     stdoutname=None,
+                     stderrname=None):
+        self.command = ensure_list(command)
+        self.infiles = ensure_list(infiles)
+        self.outfiles = ensure_list(outfiles)
+        if stdoutname is None:
+            self.stdoutname = command[-1]+".stdout"
+        else:
+            self.stdoutname = stdoutname
+        if stderrname is None:
+            self.stderrname = command[-1]+".stderr"
+        else:
+            self.stderrname = stderrname
+
+    def __call__(self, *args, **kwargs):
+        fmtkwargs = []
+        for (k,v) in kwargs.items():
+            fmtkwargs.append("%s=%s" % (k,v))
+        infiles = [kwargs[f] for f in self.infiles]
+        outfiles = [kwargs[f] for f in self.outfiles]
+        if needs_rerun(infiles, outfiles):
+            P = subprocess.Popen(self.command+args+fmtkwargs,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
+            stdout, stderr = P.communicate()
+            if P.returncode:
+                raise ValueError("Command %s failed with return code %d.\n"
+                                     "stdout:\n%s"
+                                     "stderr:\n%s"
+                                    % (" ".join(self.command),
+                                           P.returncode,
+                                           stdout,
+                                           stderr))
+            with open(self.stdoutname,"w") as f:
+                f.write(stdout)
+            with open(self.stderrname,"w") as f:
+                f.write(stderr)
+        sys.stdout.write(self.stdoutname.read())
+        sys.stderr.write(self.stderrname.read())
