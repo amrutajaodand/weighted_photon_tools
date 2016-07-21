@@ -314,6 +314,12 @@ def touch(f):
     subprocess.check_call(["touch",f])
 
 def need_rerun(inputs, outputs):
+    """Examine inputs and outputs and return whether a command should be rerun.
+
+    If one of the outputs does not exist, or if the modification date of the
+    newest input is newer than the oldest output, return True; else False. The
+    idea is to allow make-like behaviour.
+    """
     inputs = ensure_list(inputs)
     outputs = ensure_list(outputs)
 
@@ -330,11 +336,28 @@ def need_rerun(inputs, outputs):
 
     return False
 
-class Command(object):
+class FermiCommand(object):
+    """Run a command from the set of Fermi tools.
+
+    Commands are automatically rerun only if necessary. Upon construction of
+    the object, the input and output file arguments are listed; for keyword
+    arguments, the name is given, while for positional arguments, the position.
+
+    On calling this object, positional arguments appear in positions, and
+    keyword arguments are appended in the form key=value. Two special keyword
+    arguments are recognized:
+
+    rerun determines whether to force a rerun of the command.
+    True means always rerun, False means never, and None (the default)
+    means rerun if necessary.
+
+    call_id is a string describing this particular call. If provided,
+    standard out and standard error are saved to files and can be displayed
+    even if a rerun is not necessary. If not provided, they will be seen
+    only if the command is actually run.
+    """
     def __init__(self, command,
-                     infiles=[], outfiles=[],
-                     stdoutname=None,
-                     stderrname=None):
+                     infiles=[], outfiles=[]):
         self.command = ensure_list(command)
         self.infiles = ensure_list(infiles)
         self.outfiles = ensure_list(outfiles)
@@ -348,12 +371,15 @@ class Command(object):
             self.stderrname = stderrname
 
     def __call__(self, *args, **kwargs):
+        rerun = kwargs.pop("rerun", None)
+        call_id = kwargs.pop("call_id", None)
+
         fmtkwargs = []
         for (k,v) in kwargs.items():
             fmtkwargs.append("%s=%s" % (k,v))
         infiles = [kwargs[f] for f in self.infiles]
         outfiles = [kwargs[f] for f in self.outfiles]
-        if needs_rerun(infiles, outfiles):
+        if rerun or (rerun is None and needs_rerun(infiles, outfiles)):
             P = subprocess.Popen(self.command+args+fmtkwargs,
                                      stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE)
@@ -366,9 +392,14 @@ class Command(object):
                                            P.returncode,
                                            stdout,
                                            stderr))
-            with open(self.stdoutname,"w") as f:
-                f.write(stdout)
-            with open(self.stderrname,"w") as f:
-                f.write(stderr)
-        sys.stdout.write(self.stdoutname.read())
-        sys.stderr.write(self.stderrname.read())
+            if call_id is not None:
+                with open(call_id+".stdout","w") as f:
+                    f.write(stdout)
+                with open(call_id+".stderr","w") as f:
+                    f.write(stderr)
+            else:
+                sys.stdout.write(stdout)
+                sys.stderr.write(stderr)
+        if call_id is not None:
+            sys.stdout.write(open(call_id+".stdout").read())
+            sys.stderr.write(open(call_id+".stderr").read())
