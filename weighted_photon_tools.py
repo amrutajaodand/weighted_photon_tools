@@ -5,8 +5,17 @@ from __future__ import division, print_function
 import os
 import subprocess
 import sys
+import shutil
 
 import numpy as np
+
+Fermi_MJDREFf = 51910
+Fermi_MJDREFi = 7.428703703703703*10**-4
+FERMI_MJDREF = Fermi_MJDREFf + Fermi_MJDREFi 
+
+def Fermi_MET_to_MJD(x):
+    y = x/86400.0 + FERMI_MJDREF
+    return y
 
 def h_fpp(H):
     return np.exp(-0.398405*H)
@@ -323,6 +332,15 @@ def need_rerun(inputs, outputs):
     inputs = ensure_list(inputs)
     outputs = ensure_list(outputs)
 
+    io = inputs
+    inputs = []
+    for i in io:
+        if i.startswith("@"):
+            for l in open(i[1:]).readlines():
+                inputs.append(l.strip())
+        else:
+            inputs.append(i)
+
     oldest_out = np.inf
 
     for o in outputs:
@@ -357,49 +375,115 @@ class FermiCommand(object):
     only if the command is actually run.
     """
     def __init__(self, command,
-                     infiles=[], outfiles=[]):
+                     infiles=[], outfiles=[],
+                     inplace={}):
         self.command = ensure_list(command)
         self.infiles = ensure_list(infiles)
         self.outfiles = ensure_list(outfiles)
-        if stdoutname is None:
-            self.stdoutname = command[-1]+".stdout"
-        else:
-            self.stdoutname = stdoutname
-        if stderrname is None:
-            self.stderrname = command[-1]+".stderr"
-        else:
-            self.stderrname = stderrname
+        self.inplace = dict(inplace)
+        for (k,v) in self.inplace.items():
+            if k not in self.infiles:
+                raise ValueError("Parameter %s to modify inplace not listed"
+                                     "among input parameters: %s"
+                                     % (k,self.infiles))
+            if v not in self.outfiles:
+                raise ValueError("Destination parameter %s for inplace"
+                                     "modification not listed among output"
+                                     "parameters: %s"
+                                     % (v,self.outfiles))
 
     def __call__(self, *args, **kwargs):
         rerun = kwargs.pop("rerun", None)
         call_id = kwargs.pop("call_id", None)
 
-        fmtkwargs = []
-        for (k,v) in kwargs.items():
-            fmtkwargs.append("%s=%s" % (k,v))
         infiles = [kwargs[f] for f in self.infiles]
         outfiles = [kwargs[f] for f in self.outfiles]
-        if rerun or (rerun is None and needs_rerun(infiles, outfiles)):
-            P = subprocess.Popen(self.command+args+fmtkwargs,
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE)
-            stdout, stderr = P.communicate()
-            if P.returncode:
-                raise ValueError("Command %s failed with return code %d.\n"
-                                     "stdout:\n%s"
-                                     "stderr:\n%s"
-                                    % (" ".join(self.command),
-                                           P.returncode,
-                                           stdout,
-                                           stderr))
-            if call_id is not None:
-                with open(call_id+".stdout","w") as f:
-                    f.write(stdout)
-                with open(call_id+".stderr","w") as f:
-                    f.write(stderr)
-            else:
-                sys.stdout.write(stdout)
-                sys.stderr.write(stderr)
+        if rerun or (rerun is None and need_rerun(infiles, outfiles)):
+            success = False
+            try:
+                if self.inplace:
+                    for (k, v) in self.inplace.items():
+                        shutil.copy(kwargs[k],kwargs[v])
+                        kwargs[k] = kwargs[v]
+                        del kwargs[v]
+                fmtkwargs = []
+                for (k,v) in kwargs.items():
+                    fmtkwargs.append("%s=%s" % (k,v))
+                P = subprocess.Popen(self.command+list(args)+fmtkwargs,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE)
+                stdout, stderr = P.communicate()
+                if P.returncode:
+                    raise ValueError("Command %s failed with return code %d.\n"
+                                         "stdout:\n%s"
+                                         "stderr:\n%s"
+                                        % (" ".join(self.command
+                                                        +list(args)
+                                                        +fmtkwargs),
+                                               P.returncode,
+                                               stdout,
+                                               stderr))
+                if call_id is not None:
+                    with open(call_id+".stdout","w") as f:
+                        f.write(stdout)
+                    with open(call_id+".stderr","w") as f:
+                        f.write(stderr)
+                else:
+                    sys.stdout.write(stdout)
+                    sys.stderr.write(stderr)
+                success = True
+            finally:
+                if not success:
+                    for f in outfiles:
+                        try:
+                            os.unlink(f)
+                        except OSError as e:
+                            sys.stderr.write("Problem deleting %s: %s" % (f,e))
         if call_id is not None:
             sys.stdout.write(open(call_id+".stdout").read())
             sys.stderr.write(open(call_id+".stderr").read())
+
+def add_photon_phases(parfile, infile, scfile, outfile,
+                          rerun=None, call_id=None,
+                          orbital=False, barycol=None,
+                          column_name=None,
+                          t2command="tempo2"):
+    if rerun or (rerun is None and needs_rerun([parfile,infile],outfile)):
+        t2args = ["-gr", "fermi",
+                  "-f", parfile,
+                  "-graph", "0",
+                  "-ft1", infile,
+                  "-ft2", scfile,
+                  "-phase"]
+        if orbital:
+            t2args.append("-ophase")
+        if barycol:
+            t2args.append("-barycol")
+            t2args.append(barycol)
+        if column_name:
+            t2args.append("-colname")
+            t2args.append(column_name)
+
+        P = subprocess.Popen([t2command]+t2args,
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        stdout, stderr = P.communicate()
+        if P.returncode:
+            raise ValueError("Command %s failed with return code %d.\n"
+                                 "stdout:\n%s"
+                                 "stderr:\n%s"
+                                % (" ".join(self.command),
+                                       P.returncode,
+                                       stdout,
+                                       stderr))
+        if call_id is not None:
+            with open(call_id+".stdout","w") as f:
+                f.write(stdout)
+            with open(call_id+".stderr","w") as f:
+                f.write(stderr)
+        else:
+            sys.stdout.write(stdout)
+            sys.stderr.write(stderr)
+    if call_id is not None:
+        sys.stdout.write(open(call_id+".stdout").read())
+        sys.stderr.write(open(call_id+".stderr").read())
