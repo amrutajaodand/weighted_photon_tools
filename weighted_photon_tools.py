@@ -5,6 +5,10 @@ from __future__ import division, print_function
 import os
 import subprocess
 import sys
+import shutil
+import pickle
+import time
+from logging import info, debug
 
 import numpy as np
 
@@ -323,15 +327,36 @@ def need_rerun(inputs, outputs):
     inputs = ensure_list(inputs)
     outputs = ensure_list(outputs)
 
+    if len(outputs)==0:
+        raise ValueError("No outputs specified")
+
+    io = inputs
+    inputs = []
+    for i in io:
+        if i.startswith("@"):
+            for l in open(i[1:]).readlines():
+                inputs.append(l.strip())
+        else:
+            inputs.append(i)
+
     oldest_out = np.inf
+    oldest_out_name = None
 
     for o in outputs:
         if not os.path.exists(o):
+            info("Output %s missing" % o)
             return True
-        oldest_out = min(os.path.getmtime(o), oldest_out)
+        ot = os.path.getmtime(o)
+        if ot<oldest_out:
+            oldest_out = ot
+            oldest_out_name = o
 
     for i in inputs:
-        if os.path.getmtime(i) >= oldest_out:
+        if os.path.getmtime(i) > oldest_out:
+            info("Input %s newer than %s" % (i,oldest_out_name))
+            debug("%s > %s" %
+                      (time.ctime(os.path.getmtime(i)),
+                        time.ctime(os.path.getmtime(oldest_out_name))))
             return True
 
     return False
@@ -357,49 +382,136 @@ class FermiCommand(object):
     only if the command is actually run.
     """
     def __init__(self, command,
-                     infiles=[], outfiles=[]):
+                     infiles=[], outfiles=[],
+                     inplace={}):
         self.command = ensure_list(command)
         self.infiles = ensure_list(infiles)
         self.outfiles = ensure_list(outfiles)
-        if stdoutname is None:
-            self.stdoutname = command[-1]+".stdout"
-        else:
-            self.stdoutname = stdoutname
-        if stderrname is None:
-            self.stderrname = command[-1]+".stderr"
-        else:
-            self.stderrname = stderrname
+        if len(self.outfiles)==0:
+            raise ValueError("No output files specified")
+        self.inplace = dict(inplace)
+        for (k,v) in self.inplace.items():
+            if k not in self.infiles:
+                raise ValueError("Parameter %s to modify inplace not listed"
+                                     "among input parameters: %s"
+                                     % (k,self.infiles))
+            if v not in self.outfiles:
+                raise ValueError("Destination parameter %s for inplace"
+                                     "modification not listed among output"
+                                     "parameters: %s"
+                                     % (v,self.outfiles))
 
     def __call__(self, *args, **kwargs):
         rerun = kwargs.pop("rerun", None)
         call_id = kwargs.pop("call_id", None)
 
-        fmtkwargs = []
-        for (k,v) in kwargs.items():
-            fmtkwargs.append("%s=%s" % (k,v))
         infiles = [kwargs[f] for f in self.infiles]
         outfiles = [kwargs[f] for f in self.outfiles]
-        if rerun or (rerun is None and needs_rerun(infiles, outfiles)):
-            P = subprocess.Popen(self.command+args+fmtkwargs,
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE)
-            stdout, stderr = P.communicate()
-            if P.returncode:
-                raise ValueError("Command %s failed with return code %d.\n"
-                                     "stdout:\n%s"
-                                     "stderr:\n%s"
-                                    % (" ".join(self.command),
-                                           P.returncode,
-                                           stdout,
-                                           stderr))
-            if call_id is not None:
-                with open(call_id+".stdout","w") as f:
-                    f.write(stdout)
-                with open(call_id+".stderr","w") as f:
-                    f.write(stderr)
-            else:
+        stdout_name, stderr_name, args_name = [outfiles[0]+"."+s
+                                                   for s in ["stdout",
+                                                             "stderr",
+                                                             "args"]]
+        infiles.append(args_name)
+        outfiles.extend((stderr_name, stdout_name))
+
+        if os.path.exists(args_name):
+            old_args = pickle.load(open(args_name,"r"))
+        else:
+            info("No old arguments on record")
+            old_args = ([], {})
+        new_args = (args, kwargs)
+        if new_args != old_args:
+            info("Arguments changed")
+            debug("%s != %s" % (new_args, old_args))
+            with open(args_name,"w") as f:
+                pickle.dump(new_args, f)
+
+        if rerun or (rerun is None and need_rerun(infiles, outfiles)):
+            success = False
+            try:
+                if self.inplace:
+                    for (k, v) in self.inplace.items():
+                        shutil.copy(kwargs[k],kwargs[v])
+                        kwargs[k] = kwargs[v]
+                        del kwargs[v]
+                fmtkwargs = []
+                for (k,v) in kwargs.items():
+                    fmtkwargs.append("%s=%s" % (k,v))
+                with open(stdout_name,"w") as stdout, \
+                  open(stderr_name, "w") as stderr:
+                    P = subprocess.Popen(self.command+list(args)+fmtkwargs,
+                                             stdout=stdout.fileno(),
+                                             stderr=stderr.fileno())
+                    P.communicate()
+                stdout = open(stdout_name,"r").read()
+                stderr = open(stderr_name,"r").read()
+                if P.returncode:
+                    raise ValueError("Command %s failed with return code %d.\n"
+                                         "stdout:\n%s"
+                                         "stderr:\n%s"
+                                        % (" ".join(self.command
+                                                        +list(args)
+                                                        +fmtkwargs),
+                                               P.returncode,
+                                               stdout,
+                                               stderr))
                 sys.stdout.write(stdout)
                 sys.stderr.write(stderr)
+                success = True
+            finally:
+                if not success:
+                    for f in outfiles:
+                        try:
+                            os.unlink(f)
+                        except OSError as e:
+                            sys.stderr.write("Problem deleting %s: %s" % (f,e))
+        else: # no need to rerun
+            sys.stdout.write(open(stdout_name).read())
+            sys.stderr.write(open(stderr_name).read())
+
+def add_photon_phases(parfile, infile, scfile, outfile,
+                          rerun=None, call_id=None,
+                          orbital=False, barycol=None,
+                          column_name=None,
+                          t2command="tempo2"):
+    if rerun or (rerun is None and needs_rerun([parfile,infile],outfile)):
+        t2args = ["-gr", "fermi",
+                  "-f", parfile,
+                  "-graph", "0",
+                  "-ft1", infile,
+                  "-ft2", scfile,
+                  "-phase"]
+        if orbital:
+            t2args.append("-ophase")
+        if barycol:
+            t2args.append("-barycol")
+            t2args.append(barycol)
+        if column_name:
+            t2args.append("-colname")
+            t2args.append(column_name)
+
+        P = subprocess.Popen([t2command]+t2args,
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        stdout, stderr = P.communicate()
+        if P.returncode:
+            raise ValueError("Command %s failed with return code %d.\n"
+                                 "stdout:\n%s"
+                                 "stderr:\n%s"
+                                % (" ".join(self.command),
+                                       P.returncode,
+                                       stdout,
+                                       stderr))
         if call_id is not None:
-            sys.stdout.write(open(call_id+".stdout").read())
-            sys.stderr.write(open(call_id+".stderr").read())
+            with open(call_id+".stdout","w") as f:
+                f.write(stdout)
+            with open(call_id+".stderr","w") as f:
+                f.write(stderr)
+        else:
+            sys.stdout.write(stdout)
+            sys.stderr.write(stderr)
+    if call_id is not None:
+        sys.stdout.write(open(call_id+".stdout").read())
+        sys.stderr.write(open(call_id+".stderr").read())
+
+
