@@ -474,14 +474,14 @@ class Command(object):
             sys.stderr.write(open(stderr_name).read())
 
 class FermiCommand(Command):
-    def format_args_kwargs(self, args, kwargs):
+    def format_kwargs(self, args, kwargs):
         fmtkwargs = []
         for (k,v) in kwargs.items():
             fmtkwargs.append("%s=%s" % (k,v))
         return fmtkwargs
 
 class Tempo2Command(Command):
-    def format_args_kwargs(self, args, kwargs):
+    def format_kwargs(self, args, kwargs):
         fmtkwargs = []
         for (k,v) in kwargs.items():
             fmtkwargs.append("-%s" % k)
