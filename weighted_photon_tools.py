@@ -447,7 +447,7 @@ class Command(object):
                         shutil.copy(kwargs[k],kwargs[v])
                         kwargs[k] = kwargs[v]
                         del kwargs[v]
-               with open(stdout_name,"w") as stdout, \
+                with open(stdout_name,"w") as stdout, \
                   open(stderr_name, "w") as stderr:
                     P = subprocess.Popen(self.command
                                              +list(args)
@@ -467,7 +467,7 @@ class Command(object):
                                                P.returncode,
                                                stdout,
                                                stderr))
-               sys.stdout.write(stdout)
+                sys.stdout.write(stdout)
                 sys.stderr.write(stderr)
                 success = True
             finally:
@@ -477,19 +477,19 @@ class Command(object):
                             os.unlink(f)
                         except OSError as e:
                             sys.stderr.write("Problem deleting %s: %s" % (f,e))
-       else: # no need to rerun
+        else: # no need to rerun
             sys.stdout.write(open(stdout_name).read())
             sys.stderr.write(open(stderr_name).read())
 
 class FermiCommand(Command):
-    def format_kwargs(self, args, kwargs):
+    def format_kwargs(self, kwargs):
         fmtkwargs = []
         for (k,v) in kwargs.items():
             fmtkwargs.append("%s=%s" % (k,v))
         return fmtkwargs
 
 class Tempo2Command(Command):
-    def format_kwargs(self, args, kwargs):
+    def format_kwargs(self, kwargs):
         fmtkwargs = []
         for (k,v) in kwargs.items():
             fmtkwargs.append("-%s" % k)
@@ -505,7 +505,7 @@ def add_photon_phases(parfile, infile, scfile, outfile,
                           orbital=False, barycol=None,
                           column_name=None,
                           t2command="tempo2"):
-       t2args = ["-gr", "fermi", # make sure this is first just in case
+        t2args = ["-gr", "fermi", # make sure this is first just in case
                   "-phase"]
         t2kwargs = {}
         if orbital:
