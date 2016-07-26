@@ -10,6 +10,8 @@ import pickle
 import time
 from logging import info, debug
 
+from astropy.coordinates import get_icrs_coordinates
+
 import numpy as np
 
 def h_fpp(H):
@@ -509,3 +511,21 @@ def add_photon_phases(parfile, infile, scfile, outfile,
                        ft1=infile, ft2=scfile,
                        outfile=outfile,
                        **t2kwargs)
+
+
+class Source(object):
+    def __init__(self, name, directory, coords=None):
+        self.name = name
+        self.directory = directory
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory)
+        if coords is None:
+            coords = get_icrs_coordinates(self.name)
+        self.coords = coords
+        self.ra = self.coords.ra.degree
+        self.dec = self.coords.dec.degree
+
+    def file(self, filename):
+        return os.path.join(self.directory, filename)
+
+
