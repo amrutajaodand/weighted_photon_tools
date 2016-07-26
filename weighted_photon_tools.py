@@ -12,6 +12,14 @@ from logging import info, debug
 
 import numpy as np
 
+Fermi_MJDREFf = 51910
+Fermi_MJDREFi = 7.428703703703703*10**-4
+FERMI_MJDREF = Fermi_MJDREFf + Fermi_MJDREFi 
+
+def Fermi_MET_to_MJD(x):
+    y = x/86400.0 + FERMI_MJDREF
+    return y
+
 def h_fpp(H):
     return np.exp(-0.398405*H)
 def log10_h_fpp(H):
@@ -437,7 +445,7 @@ class Command(object):
                         shutil.copy(kwargs[k],kwargs[v])
                         kwargs[k] = kwargs[v]
                         del kwargs[v]
-                with open(stdout_name,"w") as stdout, \
+               with open(stdout_name,"w") as stdout, \
                   open(stderr_name, "w") as stderr:
                     P = subprocess.Popen(self.command
                                              +list(args)
@@ -457,7 +465,7 @@ class Command(object):
                                                P.returncode,
                                                stdout,
                                                stderr))
-                sys.stdout.write(stdout)
+               sys.stdout.write(stdout)
                 sys.stderr.write(stderr)
                 success = True
             finally:
@@ -467,7 +475,7 @@ class Command(object):
                             os.unlink(f)
                         except OSError as e:
                             sys.stderr.write("Problem deleting %s: %s" % (f,e))
-        else: # no need to rerun
+       else: # no need to rerun
             sys.stdout.write(open(stdout_name).read())
             sys.stderr.write(open(stderr_name).read())
 
@@ -495,7 +503,7 @@ def add_photon_phases(parfile, infile, scfile, outfile,
                           orbital=False, barycol=None,
                           column_name=None,
                           t2command="tempo2"):
-        t2args = ["-gr", "fermi", # make sure this is first just in case
+       t2args = ["-gr", "fermi", # make sure this is first just in case
                   "-phase"]
         t2kwargs = {}
         if orbital:
