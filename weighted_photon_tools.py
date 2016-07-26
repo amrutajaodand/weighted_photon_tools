@@ -6,6 +6,9 @@ import os
 import subprocess
 import sys
 import shutil
+import pickle
+import time
+from logging import info, debug
 
 import numpy as np
 
@@ -332,6 +335,9 @@ def need_rerun(inputs, outputs):
     inputs = ensure_list(inputs)
     outputs = ensure_list(outputs)
 
+    if len(outputs)==0:
+        raise ValueError("No outputs specified")
+
     io = inputs
     inputs = []
     for i in io:
@@ -342,19 +348,28 @@ def need_rerun(inputs, outputs):
             inputs.append(i)
 
     oldest_out = np.inf
+    oldest_out_name = None
 
     for o in outputs:
         if not os.path.exists(o):
+            info("Output %s missing" % o)
             return True
-        oldest_out = min(os.path.getmtime(o), oldest_out)
+        ot = os.path.getmtime(o)
+        if ot<oldest_out:
+            oldest_out = ot
+            oldest_out_name = o
 
     for i in inputs:
-        if os.path.getmtime(i) >= oldest_out:
+        if os.path.getmtime(i) > oldest_out:
+            info("Input %s newer than %s" % (i,oldest_out_name))
+            debug("%s > %s" %
+                      (time.ctime(os.path.getmtime(i)),
+                        time.ctime(os.path.getmtime(oldest_out_name))))
             return True
 
     return False
 
-class FermiCommand(object):
+class Command(object):
     """Run a command from the set of Fermi tools.
 
     Commands are automatically rerun only if necessary. Upon construction of
@@ -380,6 +395,8 @@ class FermiCommand(object):
         self.command = ensure_list(command)
         self.infiles = ensure_list(infiles)
         self.outfiles = ensure_list(outfiles)
+        if len(self.outfiles)==0:
+            raise ValueError("No output files specified")
         self.inplace = dict(inplace)
         for (k,v) in self.inplace.items():
             if k not in self.infiles:
@@ -392,12 +409,34 @@ class FermiCommand(object):
                                      "parameters: %s"
                                      % (v,self.outfiles))
 
+    def format_kwargs(self, kwargs):
+        raise NotImplementedError
+
     def __call__(self, *args, **kwargs):
         rerun = kwargs.pop("rerun", None)
         call_id = kwargs.pop("call_id", None)
 
         infiles = [kwargs[f] for f in self.infiles]
         outfiles = [kwargs[f] for f in self.outfiles]
+        stdout_name, stderr_name, args_name = [outfiles[0]+"."+s
+                                                   for s in ["stdout",
+                                                             "stderr",
+                                                             "args"]]
+        infiles.append(args_name)
+        outfiles.extend((stderr_name, stdout_name))
+
+        if os.path.exists(args_name):
+            old_args = pickle.load(open(args_name,"r"))
+        else:
+            info("No old arguments on record")
+            old_args = ([], {})
+        new_args = (args, kwargs)
+        if new_args != old_args:
+            info("Arguments changed")
+            debug("%s != %s" % (new_args, old_args))
+            with open(args_name,"w") as f:
+                pickle.dump(new_args, f)
+
         if rerun or (rerun is None and need_rerun(infiles, outfiles)):
             success = False
             try:
@@ -406,13 +445,16 @@ class FermiCommand(object):
                         shutil.copy(kwargs[k],kwargs[v])
                         kwargs[k] = kwargs[v]
                         del kwargs[v]
-                fmtkwargs = []
-                for (k,v) in kwargs.items():
-                    fmtkwargs.append("%s=%s" % (k,v))
-                P = subprocess.Popen(self.command+list(args)+fmtkwargs,
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE)
-                stdout, stderr = P.communicate()
+               with open(stdout_name,"w") as stdout, \
+                  open(stderr_name, "w") as stderr:
+                    P = subprocess.Popen(self.command
+                                             +list(args)
+                                             +self.format_kwargs(kwargs),
+                                             stdout=stdout.fileno(),
+                                             stderr=stderr.fileno())
+                    P.communicate()
+                stdout = open(stdout_name,"r").read()
+                stderr = open(stderr_name,"r").read()
                 if P.returncode:
                     raise ValueError("Command %s failed with return code %d.\n"
                                          "stdout:\n%s"
@@ -423,14 +465,8 @@ class FermiCommand(object):
                                                P.returncode,
                                                stdout,
                                                stderr))
-                if call_id is not None:
-                    with open(call_id+".stdout","w") as f:
-                        f.write(stdout)
-                    with open(call_id+".stderr","w") as f:
-                        f.write(stderr)
-                else:
-                    sys.stdout.write(stdout)
-                    sys.stderr.write(stderr)
+               sys.stdout.write(stdout)
+                sys.stderr.write(stderr)
                 success = True
             finally:
                 if not success:
@@ -439,51 +475,45 @@ class FermiCommand(object):
                             os.unlink(f)
                         except OSError as e:
                             sys.stderr.write("Problem deleting %s: %s" % (f,e))
-        if call_id is not None:
-            sys.stdout.write(open(call_id+".stdout").read())
-            sys.stderr.write(open(call_id+".stderr").read())
+       else: # no need to rerun
+            sys.stdout.write(open(stdout_name).read())
+            sys.stderr.write(open(stderr_name).read())
+
+class FermiCommand(Command):
+    def format_args_kwargs(self, args, kwargs):
+        fmtkwargs = []
+        for (k,v) in kwargs.items():
+            fmtkwargs.append("%s=%s" % (k,v))
+        return fmtkwargs
+
+class Tempo2Command(Command):
+    def format_args_kwargs(self, args, kwargs):
+        fmtkwargs = []
+        for (k,v) in kwargs.items():
+            fmtkwargs.append("-%s" % k)
+            fmtkwargs.append(str(v))
+        return fmtkwargs
+
+tempo2 = Tempo2Command("tempo2", infiles=["f", "ft1", "ft2"],
+                           outfiles=["outfile"],
+                           inplace={"ft1":"outfile"})
 
 def add_photon_phases(parfile, infile, scfile, outfile,
                           rerun=None, call_id=None,
                           orbital=False, barycol=None,
                           column_name=None,
                           t2command="tempo2"):
-    if rerun or (rerun is None and needs_rerun([parfile,infile],outfile)):
-        t2args = ["-gr", "fermi",
-                  "-f", parfile,
-                  "-graph", "0",
-                  "-ft1", infile,
-                  "-ft2", scfile,
+       t2args = ["-gr", "fermi", # make sure this is first just in case
                   "-phase"]
+        t2kwargs = {}
         if orbital:
             t2args.append("-ophase")
         if barycol:
-            t2args.append("-barycol")
-            t2args.append(barycol)
+            t2kwargs["barycol"] = barycol
         if column_name:
-            t2args.append("-colname")
-            t2args.append(column_name)
+            t2kwargs["colname"] = column_name
 
-        P = subprocess.Popen([t2command]+t2args,
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
-        stdout, stderr = P.communicate()
-        if P.returncode:
-            raise ValueError("Command %s failed with return code %d.\n"
-                                 "stdout:\n%s"
-                                 "stderr:\n%s"
-                                % (" ".join(self.command),
-                                       P.returncode,
-                                       stdout,
-                                       stderr))
-        if call_id is not None:
-            with open(call_id+".stdout","w") as f:
-                f.write(stdout)
-            with open(call_id+".stderr","w") as f:
-                f.write(stderr)
-        else:
-            sys.stdout.write(stdout)
-            sys.stderr.write(stderr)
-    if call_id is not None:
-        sys.stdout.write(open(call_id+".stdout").read())
-        sys.stderr.write(open(call_id+".stderr").read())
+        tempo2(t2args, f=parfile, graph=0,
+                       ft1=infile, ft2=scfile,
+                       outfile=outfile,
+                       **t2kwargs)
