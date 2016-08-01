@@ -16,7 +16,7 @@ import numpy as np
 
 Fermi_MJDREFf = 51910
 Fermi_MJDREFi = 7.428703703703703*10**-4
-FERMI_MJDREF = Fermi_MJDREFf + Fermi_MJDREFi 
+FERMI_MJDREF = Fermi_MJDREFf + Fermi_MJDREFi
 
 def Fermi_MET_to_MJD(x):
     y = x/86400.0 + FERMI_MJDREF
@@ -463,7 +463,7 @@ class Command(object):
                                          "stderr:\n%s"
                                         % (" ".join(self.command
                                                         +list(args)
-                                                        +fmtkwargs),
+                                                        +self.format_kwargs(kwargs)),
                                                P.returncode,
                                                stdout,
                                                stderr))
