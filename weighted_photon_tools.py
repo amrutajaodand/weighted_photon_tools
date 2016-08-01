@@ -371,6 +371,14 @@ def need_rerun(inputs, outputs):
 
     return False
 
+def write_file_if_changed(fname, s):
+    """Write the string s to the file fname but only if it's different"""
+
+    if not os.path.exists(fname) or open(fname,"rt").read() != s:
+        with open(fname, "wt") as f:
+            f.write(s)
+
+
 class Command(object):
     """Run a command from the set of Fermi tools.
 
