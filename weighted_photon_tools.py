@@ -8,6 +8,7 @@ import sys
 import shutil
 import pickle
 import time
+import signal
 from logging import info, debug
 
 from astropy.coordinates import get_icrs_coordinates
@@ -55,7 +56,7 @@ def h(phases, probs=None, n=20):
 def weighted_histogram_errors(phases, probs=None, bins=20, middle=0):
     if probs is None:
         probs = np.ones_like(phases)
-    phases = warp(phases,middle)
+    phases = wrap(phases,middle)
     prob, be = np.histogram(phases, bins=bins, range=(middle-0.5,middle+0.5),
                              weights=probs)
     prob_sq, be = np.histogram(phases, bins=bins, range=(middle-0.5,middle+0.5),
@@ -422,6 +423,9 @@ class Command(object):
     def format_kwargs(self, kwargs):
         raise NotImplementedError
 
+    def detect_failure(self, returncode, stdout, stderr):
+        return returncode!=0
+
     def __call__(self, *args, **kwargs):
         rerun = kwargs.pop("rerun", None)
         call_id = kwargs.pop("call_id", None)
@@ -457,18 +461,23 @@ class Command(object):
                         del kwargs[v]
                 with open(stdout_name,"w") as stdout, \
                   open(stderr_name, "w") as stderr:
-                    P = subprocess.Popen(self.command
-                                             +list(args)
-                                             +self.format_kwargs(kwargs),
-                                             stdout=stdout.fileno(),
-                                             stderr=stderr.fileno())
-                    P.communicate()
+                    cmd = (self.command
+                            +[str(a) for a in args]
+                            +self.format_kwargs(kwargs))
+                    P = subprocess.Popen(cmd,
+                                         stdout=stdout.fileno(),
+                                         stderr=stderr.fileno())
+                    try:
+                        P.communicate()
+                    except KeyboardInterrupt:
+                        P.send_signal(signal.SIGINT)
+                        raise
                 stdout = open(stdout_name,"r").read()
                 stderr = open(stderr_name,"r").read()
-                if P.returncode:
+                if self.detect_failure(P.returncode, stdout, stderr):
                     raise ValueError("Command %s failed with return code %d.\n"
-                                         "stdout:\n%s"
-                                         "stderr:\n%s"
+                                         "stdout:\n%s\n"
+                                         "stderr:\n%s\n"
                                         % (" ".join(self.command
                                                         +list(args)
                                                         +self.format_kwargs(kwargs)),
@@ -495,7 +504,6 @@ class FermiCommand(Command):
         for (k,v) in kwargs.items():
             fmtkwargs.append("%s=%s" % (k,v))
         return fmtkwargs
-
 class Tempo2Command(Command):
     def format_kwargs(self, kwargs):
         fmtkwargs = []
@@ -503,6 +511,13 @@ class Tempo2Command(Command):
             fmtkwargs.append("-%s" % k)
             fmtkwargs.append(str(v))
         return fmtkwargs
+    def detect_failure(self, returncode, stdout, stderr):
+        debug("tempo2 returned %d" % returncode)
+        # tempo2 return codes are useless
+        if stderr.strip():
+            return True
+        return False
+
 
 tempo2 = Tempo2Command("tempo2", infiles=["f", "ft1", "ft2"],
                            outfiles=["outfile"],
@@ -523,7 +538,7 @@ def add_photon_phases(parfile, infile, scfile, outfile,
         if column_name:
             t2kwargs["colname"] = column_name
 
-        tempo2(t2args, f=parfile, graph=0,
+        tempo2(*t2args, f=parfile, graph=0,
                        ft1=infile, ft2=scfile,
                        outfile=outfile,
                        **t2kwargs)
